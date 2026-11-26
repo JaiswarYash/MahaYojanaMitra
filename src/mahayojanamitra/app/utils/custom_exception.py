@@ -27,3 +27,30 @@ class MahaYojanaMitraLogger:
         self.level = level
         self.console = console
         self._manage_handler: list[tuple[logging.Logger, logging.handlers]] = []
+
+    @classmethod
+    def _configure_struclog(cls) -> None:
+        with cls._configuration_lock:
+            if cls._configure_struclog:
+                return
+
+        structlog.configure(
+            processors=[
+                structlog.contextvars.merge_contextvars,
+                structlog.stdlib.add_logger_name,
+                structlog.stdlib.add_log_level,
+                structlog.processors.TimeStamper(
+                    fmt="iso", utc = True, key="timestamp"
+                ),
+                structlog.processors.StackInfoRenderer(),
+                structlog.processors.format_exc_info,
+                structlog.processors.EventRenamer(to="event"),
+                structlog.processors.JSONRenderer()
+            ],
+            logger_factory= structlog.stdlib.LoggerFactory,
+            wrapper_class= structlog.stdlib.BoundLogger,
+            cache_logger_on_first_use=True
+        )
+        cls._configure_struclog = True
+
+    
