@@ -8,9 +8,9 @@ import structlog
 import threading
 from structlog.stdlib import BoundLogger
 
-LOG_DIR = Path(__file__).resolve().parent[2]/"logs" # log path
+LOG_DIR = Path(__file__).resolve().parents[2]/ "logs" # log path
 LOGGER_NAME = "MahaYojanaMitra"
-RETENTION = 10 # Number of logs to keep
+LOG_RETENTION = 10 # Number of logs to keep
 MYM_LOG_FILENAME = re.compile(r"MYM_(?:\d{4}_\d{6}|\d{8}T\d{6}_\d{6}Z)\.jonl") # log format - eg: MYM_2026_112530.jsonl
 
 class MahaYojanaMitraLogger:
@@ -80,9 +80,57 @@ class MahaYojanaMitraLogger:
         self.prune_logs(self.logs_dir, active_path = self.log_file_path)
 
         has_console_handler = any(
-            getattr(handler, "_mym_file_path", None) == file_path
+            getattr(handler, "_mym_console", None) == file_path
             for handler in stdlib_logger.handlers
         )
 
         if self.console and not has_console_handler:
-            pass
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(self.level)
+            console_handler.setFormatter(formatter)
+            console_handler._mym_console = True
+            stdlib_logger.addHandler(console_handler)
+            self._manage_handler.append((stdlib_logger, console_handler))
+
+        return structlog.get_logger(logger_name)
+
+    @classmethod
+    def prune_logs(cls, log_dir: Path, *,active_path: Path | None = None) -> int:
+        """Keep the newest EDIS logs and protect the file opened for this run."""
+
+        removed = 0
+        with cls._retention_lock:
+            condidate = []
+            for path in log_dir.iterdir():
+                if not MYM_LOG_FILENAME.fullmatch(path.name) or path.is_symlink():
+                    continue
+
+                try:
+                    if path.is_file():
+                        condidate.append((path == active_path, path.stat().st_mtime_ns, path.name, path))
+                except OSError:
+                    continue
+
+            for _,_,_, path in sorted(condidate, reverse=True)[LOG_RETENTION:]:
+                try:
+                    path.unlink()
+                    removed += 1
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    logging.getLogger(__name__).warning("Could not remove old EDIS log: %s",path.name)
+        return removed
+
+    def close(self) -> None:
+        """Flush, detach, and close handlers created by this instance."""
+        while  self._manage_handler:
+            logger, handler = self._manage_handler.pop()
+            logger.removeHandler(handler)
+            handler.flush()
+            handler.close
+
+    def __enter__(self) ->"MahaYojanaMitraLogger":
+        return self
+
+    def __exit__(self, *_:object) -> None:
+        return self.close()
